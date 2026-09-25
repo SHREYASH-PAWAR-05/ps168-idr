@@ -25,6 +25,14 @@ class SensorLogger(private val context: Context) : SensorEventListener, Location
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
+    var onEnuSample: ((ImuSample) -> Unit)? = null
+    private var lastRotVec: FloatArray? = null
+    private var lastGyro: FloatArray? = null
+    private var lastGrav: FloatArray? = null
+    var onRawSample: ((RawImuSample) -> Unit)? = null
+    private var lastRawEmitNs: Long = -1L
+    private val rawEmitIntervalNs = 100_000_000L  // 100 ms = 10 Hz
+
     private val sensorNames = linkedMapOf(
         Sensor.TYPE_ACCELEROMETER to "acc",
         Sensor.TYPE_GYROSCOPE to "gyro",
@@ -97,6 +105,24 @@ class SensorLogger(private val context: Context) : SensorEventListener, Location
         val w = if (e.sensor.type == Sensor.TYPE_ROTATION_VECTOR && v.size > 3) v[3].toString() else ""
         imuWriter?.append("${e.timestamp},$name,${v[0]},${v[1]},${v[2]},$w\n")
         imuCount.incrementAndGet()
+
+        if (name == "rotvec") lastRotVec = floatArrayOf(v[0], v[1], v[2], if (v.size > 3) v[3] else 0f)
+        if (name == "gyro") lastGyro = floatArrayOf(v[0], v[1], v[2])
+        if (name == "grav") lastGrav = floatArrayOf(v[0], v[1], v[2])
+        if (name == "acc" && lastRotVec != null && lastGyro != null) {
+            val enu = EnuTransformer.deviceToEnu(lastRotVec!!, v)
+            onEnuSample?.invoke(ImuSample(e.timestamp, enu[0], enu[1], enu[2], lastGyro!![0], lastGyro!![1], lastGyro!![2]))
+        }
+        if (name == "acc" && lastGyro != null && lastGrav != null) {
+            if (lastRawEmitNs == -1L || e.timestamp - lastRawEmitNs >= rawEmitIntervalNs) {
+                onRawSample?.invoke(RawImuSample(
+                    e.timestamp, v[0], v[1], v[2],
+                    lastGyro!![0], lastGyro!![1], lastGyro!![2],
+                    lastGrav!![0], lastGrav!![1], lastGrav!![2]
+                ))
+                lastRawEmitNs = e.timestamp
+            }
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

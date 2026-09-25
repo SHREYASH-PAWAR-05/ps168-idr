@@ -14,7 +14,8 @@ class ReplayEngine(
     private val gnssFile: File,
     private val onImu: (ImuRow) -> Unit,
     private val onGnss: (GnssRow) -> Unit,
-    private val onFinished: () -> Unit
+    private val onFinished: () -> Unit,
+    private val onEnuSample: ((ImuSample) -> Unit)? = null
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var imuRows: List<ImuRow> = emptyList()
@@ -29,6 +30,8 @@ class ReplayEngine(
     private var gnssIndex = 0
     private var startWallTimeMs = 0L
     private var startLogTimeNs = 0L
+    private var lastRotVec: FloatArray? = null
+    private var lastGyro: FloatArray? = null
 
     fun load() {
         imuRows = BufferedReader(FileReader(imuFile)).useLines { lines ->
@@ -98,7 +101,21 @@ class ReplayEngine(
         handler.postDelayed({
             if (!isRunning) return@postDelayed
             if (useImu) {
-                imuRows.getOrNull(imuIndex)?.let { onImu(it) }
+                imuRows.getOrNull(imuIndex)?.let { row ->
+                    onImu(row)
+                    when (row.sensor) {
+                        "rotvec" -> lastRotVec = floatArrayOf(row.x, row.y, row.z, row.w ?: 0f)
+                        "gyro" -> lastGyro = floatArrayOf(row.x, row.y, row.z)
+                        "acc" -> {
+                            val rv = lastRotVec
+                            val gy = lastGyro
+                            if (rv != null && gy != null) {
+                                val enu = EnuTransformer.deviceToEnu(rv, floatArrayOf(row.x, row.y, row.z))
+                                onEnuSample?.invoke(ImuSample(row.tNs, enu[0], enu[1], enu[2], gy[0], gy[1], gy[2]))
+                            }
+                        }
+                    }
+                }
                 imuIndex++
             } else {
                 gnssRows.getOrNull(gnssIndex)?.let { onGnss(it) }

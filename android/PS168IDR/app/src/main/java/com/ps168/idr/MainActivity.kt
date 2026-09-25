@@ -25,10 +25,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) // Day 1: screen must stay on
-        setContent { MaterialTheme { LoggerScreen() } }
-//        setContent { MaterialTheme { ReplayScreen() } }
+//        setContent { MaterialTheme { LoggerScreen() } }
+        setContent { MaterialTheme { ReplayScreen() } }
+
     }
 }
+
 
 @Composable
 fun LoggerScreen() {
@@ -37,6 +39,14 @@ fun LoggerScreen() {
     var imuRows by remember { mutableStateOf(0L) }
     var gnssRows by remember { mutableStateOf(0L) }
     var message by remember { mutableStateOf(if (running) "Logging (service running)..." else "Ready. Press START.") }
+
+    LaunchedEffect(Unit) {
+        FeatureExtractor.loadScaler(context)
+    }
+    var featureDebug by remember { mutableStateOf("No feature window yet") }
+    var rawSampleCount by remember { mutableStateOf(0) }
+    var rawBufferSize by remember { mutableStateOf(0) }
+    val rawWindowBuffer = remember { RawWindowBuffer() }
 
     fun startService() {
         val intent = Intent(context, LoggingService::class.java).apply { action = LoggingService.ACTION_START }
@@ -73,6 +83,33 @@ fun LoggerScreen() {
             }
         }
     }
+    var enuDebug by remember { mutableStateOf("No ENU sample yet") }
+    var windowCount by remember { mutableStateOf(0) }
+    val windowBuffer = remember { WindowBuffer() }
+
+    LaunchedEffect(running) {
+        if (running) {
+            LoggingService.currentLogger?.onEnuSample = { sample ->
+                enuDebug = "E=${sample.east}  N=${sample.north}  Up=${sample.up}"
+                windowBuffer.addSample(sample) { window ->
+                    windowCount++
+                    // window = List<ImuSample>, size ~50, spanning last 5 seconds
+                }
+            }
+            LoggingService.currentLogger?.onRawSample = { sample ->
+                rawSampleCount++
+                rawWindowBuffer.addSample(sample) { window ->
+                    try {
+                        val features = FeatureExtractor.toNormalizedArray(window)
+                        featureDebug = "Feature array size=${features.size}, first 9 values=${features.take(9)}"
+                    } catch (ex: Exception) {
+                        featureDebug = "ERROR: ${ex.message}"
+                    }
+                }
+                rawBufferSize = rawWindowBuffer.currentSize
+            }
+        }
+    }
     LaunchedEffect(running) {
         while (running) {
             imuRows = LoggingService.currentLogger?.imuCount?.get() ?: 0L
@@ -101,6 +138,11 @@ fun LoggerScreen() {
                 )
             }
         }) { Text(if (running) "STOP" else "START") }
+        Text(enuDebug)
+        Text("Windows produced: $windowCount")
+        Text("Raw samples received: $rawSampleCount")
+        Text("Raw buffer size at last check: $rawBufferSize")
+        Text(featureDebug)
         Text(message)
     }
 }

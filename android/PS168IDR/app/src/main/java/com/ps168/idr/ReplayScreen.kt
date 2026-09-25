@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.io.File
-
+import kotlinx.coroutines.delay
 @Composable
 fun ReplayScreen() {
     val context = LocalContext.current
@@ -19,24 +19,41 @@ fun ReplayScreen() {
     var imuCount by remember { mutableStateOf(0) }
     var gnssCount by remember { mutableStateOf(0) }
     var blackout by remember { mutableStateOf(false) }
-
+    val stateMachine = remember { NavigationStateMachine() }
+    var navMode by remember { mutableStateOf(NavMode.GNSS_GOOD) }
     val engine = remember {
         val dir = File(context.getExternalFilesDir(null), "replay_logs/log_20260922_151652")
         ReplayEngine(
             imuFile = File(dir, "imu_log.csv"),
             gnssFile = File(dir, "gnss_log.csv"),
             onImu = { imuCount++ },
-            onGnss = { gnssCount++ },
+            onGnss = { row ->
+                gnssCount++
+                stateMachine.onGnssFix(row.accuracy ?: 999f)
+            },
             onFinished = { status = "Finished" }
         )
     }
-
+    LaunchedEffect(Unit) {
+        while (true) {
+            stateMachine.tick()
+            navMode = stateMachine.currentMode
+            delay(500)
+        }
+    }
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Replay Mode", style = MaterialTheme.typography.headlineSmall)
         Text("Status: $status")
+        NavStatusCard(
+            mode = navMode,
+            driftMeters = null,       // TODO: wire to A's EKF output once nav_state contract arrives
+            confidencePercent = null, // TODO: same
+            gnssRows = gnssCount,
+            imuRows = imuCount
+        )
         Text("Replayed IMU: $imuCount   GNSS: $gnssCount")
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text("Simulate blackout (tunnel): ")
